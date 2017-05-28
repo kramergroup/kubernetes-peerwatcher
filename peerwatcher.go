@@ -29,7 +29,7 @@ func main() {
 	}
 
 	// Process command-line arguments
-	flag.StringVar(&kubeconfig, "kubeconfig", ".config", "path to kubeconfig file for out-of-cluster operation")
+	flag.StringVar(&kubeconfig, "kubeconfig", "~/.kube/config", "path to kubeconfig file for out-of-cluster operation")
 	flag.StringVar(&namespace, "namespace", v1.NamespaceDefault, "namespace for pod")
 	flag.StringVar(&podname, "name", hostname, "name of pod")
 	flag.Parse()
