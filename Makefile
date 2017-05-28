@@ -5,7 +5,7 @@ GO=golang:1.6
 GO=mpfmedical/golang-glide
 
 PUSH_REGISTRY=registry.kramergroup.science
-APP_TAG=util/peerfinder:latest
+APP_TAG=util/peerwatcher:latest
 
 SRCDIR=$(shell pwd | sed 's|src.*$$|src|g')
 WRKPATH=$(shell pwd | sed 's|^.*src/||')
