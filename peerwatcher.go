@@ -54,7 +54,7 @@ func main() {
 
 	// Create Downstream and Watch
 	pod, err := clientset.Pods(namespace).Get(podname)
-	opts := v1.ListOptions{LabelSelector: fields.Set{"pod-template-hash": pod.Labels["pod-template-hash"]}.AsSelector().String()}
+	opts := fields.Set{"pod-template-hash": pod.Labels["pod-template-hash"]}.AsSelector()
 	watchlist := cache.NewListWatchFromClient(clientset.Core().RESTClient(), "pods", namespace, opts)
 	_, controller := cache.NewInformer(
 		watchlist,
