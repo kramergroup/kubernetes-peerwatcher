@@ -1,0 +1,4 @@
+package: kramergroup.science/kubernetes/peerfinder # e.g. github.com/foo/bar
+import:
+- package: k8s.io/client-go
+  version: v2.0.0
