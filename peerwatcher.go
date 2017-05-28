@@ -59,7 +59,7 @@ func main() {
 	_, controller := cache.NewInformer(
 		watchlist,
 		&v1.Pod{},
-		time.Second*0,
+		time.Second*10,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				fmt.Printf("add: %s \n", obj)
@@ -72,6 +72,7 @@ func main() {
 			},
 		},
 	)
+
 	stop := make(chan struct{})
 	go controller.Run(stop)
 
