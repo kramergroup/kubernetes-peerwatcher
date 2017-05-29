@@ -1,6 +1,6 @@
 # kubernetes-peerwatcher
 
-This project provides a small utility to identify related pods within a [[Kubernetes][https://kubernetes.io]] environment.
+This project provides a small utility to identify related pods within a [Kubernetes](https://kubernetes.io) environment.
 
 ## Design
 
