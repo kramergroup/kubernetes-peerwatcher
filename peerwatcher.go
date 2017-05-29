@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -17,56 +18,82 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+/* Global variable defintions */
+
+// File name of kubeconfig for out-of-cluster usecase
 var kubeconfig string
 
+// Namespace and podname of peer
 var namespace string
 var podname string
 
+// Kubernetes API source
 var clientset *kubernetes.Clientset
 
+// Local cache of API objects
 var downstream cache.Store
+
+// Controller to act on watched API changes
 var controller *cache.Controller
 
 func main() {
 
+	// First determine the hostname, which is used as podname if none is given as parameter
 	hostname, err := os.Hostname()
 	if err != nil {
 		panic(err.Error())
 	}
 
 	// Process command-line arguments
-	flag.StringVar(&kubeconfig, "kubeconfig", "~/.kube/config", "path to kubeconfig file for out-of-cluster operation")
-	flag.StringVar(&namespace, "namespace", v1.NamespaceDefault, "namespace for pod")
-	flag.StringVar(&podname, "name", hostname, "name of pod")
-	flag.Parse()
+	{
+		// kubeconfig - filename of out-of-cluster configuration
+		flag.StringVar(&kubeconfig, "kubeconfig", "~/.kube/config", "path to kubeconfig file for out-of-cluster operation")
 
-	// Configure
+		// namespace - the namespace of the pod to watch
+		flag.StringVar(&namespace, "namespace", v1.NamespaceDefault, "namespace for pod")
 
-	// creates the in-cluster config
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		// uses the current context in kubeconfig if running outside of cluster
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		// name - the name of the pod to watch
+		flag.StringVar(&podname, "name", hostname, "name of pod")
+
+		// parse command-line arguments
+		flag.Parse()
+	}
+
+	// Configure Kubernetes API source
+	{
+		// creates the in-cluster config
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			// uses the current context in kubeconfig if running outside of cluster
+			config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+			if err != nil {
+				panic(err.Error())
+			}
+		}
+
+		// creates the clientset
+		clientset, err = kubernetes.NewForConfig(config)
 		if err != nil {
 			panic(err.Error())
 		}
+
 	}
 
-	// creates the clientset
-	clientset, err = kubernetes.NewForConfig(config)
+	// Get the pod from the API source
+	pod, err := clientset.Pods(namespace).Get(podname)
 	if err != nil {
 		panic(err.Error())
 	}
 
 	// Find the owner of the pod and extract selector to find other
 	// pods managed by the same owner
-	pod, err := clientset.Pods(namespace).Get(podname)
-	podOwnerRef := pod.OwnerReferences[0]
-	owner, _ := clientset.ReplicaSets(namespace).Get(podOwnerRef.Name)
-	labels := fields.Set(owner.Spec.Selector.MatchLabels)
-	opts := v1.ListOptions{LabelSelector: labels.AsSelector().String()}
+	selector, err := GetSelectorForPodsFromOwnerReference(pod)
+	if err != nil {
+		panic(err.Error())
+	}
 
 	// Create Downstream and Watch
+	opts := v1.ListOptions{LabelSelector: selector.String()}
 	watchlist := cache.ListWatch{
 		ListFunc: func(options api.ListOptions) (runtime.Object, error) {
 			return clientset.Core().Pods(namespace).List(opts)
@@ -82,18 +109,22 @@ func main() {
 		time.Minute,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				fmt.Printf("add: %s (%d)\n", obj.(*v1.Pod).Name, len(downstream.ListKeys()))
+				fmt.Printf("add: %s (%d)\n", obj.(*v1.Pod).Name,
+					len(downstream.ListKeys()))
 			},
 			DeleteFunc: func(obj interface{}) {
-				fmt.Printf("delete: %s (%d)\n", obj.(*v1.Pod).Name, len(downstream.ListKeys()))
+				fmt.Printf("delete: %s (%d)\n", obj.(*v1.Pod).Name,
+					len(downstream.ListKeys()))
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
-				fmt.Printf("old: %s, new: %s \n", oldObj.(*v1.Pod).Name, newObj.(*v1.Pod).Name)
+				fmt.Printf("old: %s, new: %s \n",
+					oldObj.(*v1.Pod).Name,
+					newObj.(*v1.Pod).Name)
 			},
 		},
 	)
 
-	fmt.Printf("Start watching pods with selector: %s \n", labels.AsSelector().String())
+	fmt.Printf("Start watching pods with selector: %s \n", selector.String())
 	stop := make(chan struct{})
 	go controller.Run(stop)
 
@@ -101,4 +132,35 @@ func main() {
 	for {
 		time.Sleep(time.Second)
 	}
+}
+
+// GetSelectorForPodsFromOwnerReference obtains the pod selector from the
+// ownerReference of the pod
+func GetSelectorForPodsFromOwnerReference(pod *v1.Pod) (selector fields.Selector, err error) {
+
+	// First handle cases where the pod declares an owner (at the moment that seems to be only supported by ReplicaSet)
+	if len(pod.OwnerReferences) == 0 {
+		return nil, errors.New("Pod has no owner reference.")
+	}
+
+	podOwnerRef := pod.OwnerReferences[0]
+
+	// Handle different owners separately (even if only ReplicaSet seems to declare ownership in pod defintions at the moment)
+	switch podOwnerRef.Kind {
+	case "ReplicaSet":
+		owner, _ := clientset.ReplicaSets(namespace).Get(podOwnerRef.Name)
+		labels := fields.Set(owner.Spec.Selector.MatchLabels).AsSelector()
+		return labels, nil
+	case "DeamonSet": // Untested
+		owner, _ := clientset.DaemonSets(namespace).Get(podOwnerRef.Name)
+		labels := fields.Set(owner.Spec.Selector.MatchLabels).AsSelector()
+		return labels, nil
+	case "ReplicationController": // Untested
+		owner, _ := clientset.ReplicationControllers(namespace).Get(podOwnerRef.Name)
+		labels := fields.Set(owner.Spec.Selector).AsSelector()
+		return labels, nil
+	default:
+		return nil, errors.New("Unknown owner type " + podOwnerRef.Kind)
+	}
+
 }
