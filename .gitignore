@@ -1,3 +1,5 @@
 .glide
 vendor
 peerwatcher
+.#*
+\#*
