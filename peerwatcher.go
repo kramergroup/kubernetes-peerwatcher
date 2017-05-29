@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/pkg/api"
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/fields"
+	"k8s.io/client-go/pkg/runtime"
+	"k8s.io/client-go/pkg/watch"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -20,6 +23,9 @@ var namespace string
 var podname string
 
 var clientset *kubernetes.Clientset
+
+var downstream cache.Store
+var controller *cache.Controller
 
 func main() {
 
@@ -52,28 +58,47 @@ func main() {
 		panic(err.Error())
 	}
 
-	// Create Downstream and Watch
+	// Find the owner of the pod and extract selector to find other
+	// pods managed by the same owner
 	pod, err := clientset.Pods(namespace).Get(podname)
-	opts := fields.Set{"pod-template-hash": pod.Labels["pod-template-hash"]}.AsSelector()
-	watchlist := cache.NewListWatchFromClient(clientset.Core().RESTClient(), "pods", namespace, opts)
-	_, controller := cache.NewInformer(
-		watchlist,
+	podOwnerRef := pod.OwnerReferences[0]
+	owner, _ := clientset.ReplicaSets(namespace).Get(podOwnerRef.Name)
+	labels := fields.Set(owner.Spec.Selector.MatchLabels)
+	opts := v1.ListOptions{LabelSelector: labels.AsSelector().String()}
+
+	// Create Downstream and Watch
+	watchlist := cache.ListWatch{
+		ListFunc: func(options api.ListOptions) (runtime.Object, error) {
+			return clientset.Core().Pods(namespace).List(opts)
+		},
+		WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+			return clientset.Core().Pods(namespace).Watch(opts)
+		},
+	}
+
+	downstream, controller = cache.NewInformer(
+		&watchlist,
 		&v1.Pod{},
-		time.Second*10,
+		time.Minute,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
-				fmt.Printf("add: %s \n", obj)
+				fmt.Printf("add: %s (%d)\n", obj.(*v1.Pod).Name, len(downstream.ListKeys()))
 			},
 			DeleteFunc: func(obj interface{}) {
-				fmt.Printf("delete: %s \n", obj)
+				fmt.Printf("delete: %s (%d)\n", obj.(*v1.Pod).Name, len(downstream.ListKeys()))
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
-				fmt.Printf("old: %s, new: %s \n", oldObj, newObj)
+				fmt.Printf("old: %s, new: %s \n", oldObj.(*v1.Pod).Name, newObj.(*v1.Pod).Name)
 			},
 		},
 	)
 
+	fmt.Printf("Start watching pods with selector: %s \n", labels.AsSelector().String())
 	stop := make(chan struct{})
 	go controller.Run(stop)
 
+	// Run forever
+	for {
+		time.Sleep(time.Second)
+	}
 }
